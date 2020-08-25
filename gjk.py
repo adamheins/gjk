@@ -6,14 +6,15 @@ import matplotlib.pyplot as plt
 class Polygon:
     ''' Convex polygonal shape. '''
     def __init__(self, vertices):
+        # vertices stored as 2xn matrix
         self.vertices = vertices
 
     def support(self, d):
         ''' Return the point in the shape that has the highest dot product with
             unit vector d. '''
         # this is always one of the vertices
-        idx = np.argmax([d.dot(v) for v in self.vertices])
-        return self.vertices[idx]
+        idx = np.argmax(d.dot(self.vertices))
+        return self.vertices[:, idx]
 
 
 class Circle:
@@ -22,11 +23,58 @@ class Circle:
         self.r = r
 
     def support(self, d):
-        return self.c + self.r * d
+        return self.c + self.r * d / np.linalg.norm(d)
 
 
-def gjk(shape1, shape2, a):
-    A = shape1.support(a) - shape2.support(-a)
+def gjk(shape1, shape2, a0=np.array([1, 0]), eps=0.001):
+    ''' Gilbert-Johnson-Keerthi distance algorithm.
+        Parameters:
+            shape1, shape2: shapes to calculate distance between
+            a0: arbitrary initial direction
+        Returns:
+            Distance between the shapes (0 if they intersect),
+            points a, b representing the closest points on the first and second
+            shapes, respectively. '''
+    # arbitrary point in Minoski diff
+    v = shape1.support(a0) - shape2.support(-a0)
+
+    # direction to origin from closest point
+    a = shape1.support(-v)
+    b = shape2.support(v)
+    w = a - b
+
+    # initialize simplex
+    S = np.zeros((2, 3))
+    bitset = 0
+
+    S1 = np.zeros((2, 3))
+    S2 = np.zeros((2, 3))
+
+    # iterate until w is no more extreme in the direction v than v itself
+    while v.dot(v) - v.dot(w) > eps:
+        # add new point to simplex
+        i = find_first_unset(bitset)
+        bitset = set_bit(bitset, i)
+        S[:, i] = w
+        S1[:, i] = a
+        S2[:, i] = b
+
+        # compute closest point to the origin in the simplex, as well the
+        # smallest simplex that supports that point
+        v, bitset, contains_origin = johnson5(S, bitset)
+
+        # TODO not sure on this
+        if contains_origin:
+            break
+
+        # recompute direction
+        a = shape1.support(-v)
+        b = shape2.support(v)
+        w = a - b
+
+    distance = np.sqrt(v.dot(v))
+    IPython.embed()
+    return distance, a, b
 
 
 def dx(points, index_set, i):
@@ -48,7 +96,7 @@ def dx(points, index_set, i):
     return np.sum([ dx(points, index_set_i, j) * dp.dot(points[:, j]) for j in nz_idx ])
 
 
-BITSETS = np.array([0b100, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111])
+BITSETS = np.array([0b001, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111])
 
 
 def johnson5(points, this_bitset):
@@ -156,8 +204,13 @@ def bit_indices(b, length=3):
 
 
 def find_first_set(b):
-    ''' Return the index of the first set bit (bit == 1) in b. '''
-    return np.uint(np.log2(b & -b))
+    ''' Return the index of the first one bit in b. '''
+    return int(np.log2(b & -b))
+
+
+def find_first_unset(b):
+    ''' Return the index of the first zero bit in b. '''
+    return find_first_set(~b)
 
 
 def dx2(Y, b, i):
@@ -286,43 +339,40 @@ def johnson(Y):
 def main():
     # S = np.array([[0, 0], [0, 1], [1, 0]]) + np.array([0, 0.5])
     # X = S.T
-    S = np.random.random((2, 3)) * 10 - 5
-    v1, X1, contains_origin1 = johnson(S)
-    v2, X2, contains_origin2 = johnson5(S, 0b111)
-    print(v1)
-    print(v2)
+    # S = np.random.random((2, 3)) * 10 - 5
+    # v1, X1, contains_origin1 = johnson(S)
+    # S = np.zeros((2, 3))
+    # S[:, 0] = np.ones(2)
+    # v2, X2, contains_origin2 = johnson5(S, 0b001)
+    # print(v1)
+    # print(v2)
+    #
+    V = np.random.random((2, 3)) * 10 - 5
+
+    shape1 = Circle(c=np.random.random(2)*8-4, r=1)
+    shape2 = Polygon(V)
+
+    d, a, b = gjk(shape1, shape2)
+    print(d)
 
     fig, ax = plt.subplots(1)
     ax.set_xlim([-5, 5])
     ax.set_ylim([-5, 5])
-    ax.add_patch(plt.Polygon(S.T, color='k', fill=False, closed=True))
-    plt.plot([0, v1[0]], [0, v1[1]], '-o', label='v1')
-    plt.plot([0, v2[0]], [0, v2[1]], '-o', label='v2')
-    plt.legend()
+    ax.add_patch(plt.Circle(shape1.c, shape1.r, fill=False))
+    ax.add_patch(plt.Polygon(shape2.vertices.T, color='k', fill=False, closed=True))
+    plt.plot([a[0], b[0]], [a[1], b[1]], '-o')
+    # plt.plot([0, v2[0]], [0, v2[1]], '-o', label='v2')
+
+    # fig, ax = plt.subplots(1)
+    # ax.set_xlim([-5, 5])
+    # ax.set_ylim([-5, 5])
+    # ax.add_patch(plt.Polygon(S.T, color='k', fill=False, closed=True))
+    # plt.plot([0, v1[0]], [0, v1[1]], '-o', label='v1')
+    # plt.plot([0, v2[0]], [0, v2[1]], '-o', label='v2')
+    # plt.legend()
     plt.grid()
     plt.show()
 
-    # IPython.embed()
-
-
-# def main():
-#     pygame.init()
-#
-#     screen = pygame.display.set_mode((240, 240))
-#
-#     # define a variable to control the main loop
-#     running = True
-#
-#     # main loop
-#     while running:
-#         # event handling, gets all event from the event queue
-#         for event in pygame.event.get():
-#             # only do something if the event is of type QUIT
-#             if event.type == pygame.QUIT:
-#                 # change the value to False, to exit the main loop
-#                 print('user exited')
-#                 running = False
-#
 
 if __name__ == '__main__':
     main()
