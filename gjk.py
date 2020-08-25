@@ -29,31 +29,6 @@ def gjk(shape1, shape2, a):
     A = shape1.support(a) - shape2.support(-a)
 
 
-# def dx(Y):
-#     ncol = Y.shape[1]
-#     if ncol == 1:
-#         return 1
-#     y0 = Y[:, 0]
-#     ym = Y[:, -1]
-#     return dx(Y[:, :-1]) * (y0 - ym).dot(y0)
-
-
-# def dx(X, i):
-#     ncol = X.shape[1]
-#     if ncol == 1:
-#         return 1
-#
-#     # remove ith column
-#     xi = X[:, i]
-#     Xi = np.delete(X, i, axis=1)
-#
-#     # arbitrary which column of Xi is chosen, so take the first one
-#     x0 = Xi[:, 0]
-#
-#     # compute dx for adding the ith element back into the simplex
-#     return np.sum([ dx(Xi, j) * (x0 - xi).dot(Xi[:, j]) for j in range(ncol-1)])
-
-
 def dx(points, index_set, i):
     # base case: delta = 1 for singleton sets
     if np.sum(index_set) == 1:
@@ -73,12 +48,10 @@ def dx(points, index_set, i):
     return np.sum([ dx(points, index_set_i, j) * dp.dot(points[:, j]) for j in nz_idx ])
 
 
-BITSETS = np.array([0b111, 0b011, 0b101, 0b110, 0b001, 0b010, 0b100])
+BITSETS = np.array([0b100, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111])
 
 
 def johnson5(points, this_bitset):
-    Y = points
-
     # store deltas: row is indexed by the points in the set X; column indexed
     # by delta index
     # {y1} represented by 001, {y2} by 010, etc
@@ -89,23 +62,20 @@ def johnson5(points, this_bitset):
     D[0b010, 1] = 1
     D[0b100, 2] = 1
 
-    D[0b011, 1] = D[0b001, 0] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 0])
-    D[0b101, 2] = D[0b001, 0] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 0])
+    # calculate deltas
+    # this implementation requires bitset array to be ordered in increasing
+    # number of bits
+    for bitset in BITSETS:
+        if bitset & this_bitset != bitset:
+            continue
 
-    D[0b011, 0] = D[0b010, 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1])
-    D[0b110, 2] = D[0b010, 1] * (Y[:, 1] - Y[:, 2]).dot(Y[:, 1])
-
-    D[0b101, 0] = D[0b100, 2] * (Y[:, 2] - Y[:, 0]).dot(Y[:, 2])
-    D[0b110, 1] = D[0b100, 2] * (Y[:, 2] - Y[:, 1]).dot(Y[:, 2])
-
-    D[0b111, 0] = D[0b110, 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1]) \
-                + D[0b110, 2] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 2])
-
-    D[0b111, 1] = D[0b101, 0] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 0]) \
-                + D[0b101, 2] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 2])
-
-    D[0b111, 2] = D[0b011, 0] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 0]) \
-                + D[0b011, 1] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 1])
+        for i in range(3):
+            bitset_no_i = unset_bit(bitset, i)
+            if bitset_no_i != 0 and get_bit(bitset, i):
+                k = find_first_set(bitset_no_i)
+                yk = points[:, k]
+                yi = points[:, i]
+                D[bitset, i] = np.sum([ D[bitset_no_i, j] * (yk - yi).dot(points[:, j]) for j in bit_indices(bitset_no_i) ])
 
     for bitset in BITSETS:
         # only iterate bit sets that contain members of the current bitset
@@ -123,10 +93,9 @@ def johnson5(points, this_bitset):
         if contains_closest_pt:
             v = np.zeros(2)
             sv = 0
-            for j in range(3):
-                if get_bit(bitset, j):
-                    v += D[bitset, j] * points[:, j]
-                    sv += D[bitset, j]
+            for j in bit_indices(bitset):
+                v += D[bitset, j] * points[:, j]
+                sv += D[bitset, j]
             v = v / sv
             contains_origin = (bitset == 0b111)
             return v, bitset, contains_origin
@@ -181,9 +150,14 @@ def get_bit(b, i):
     return b & (1 << i)
 
 
+def bit_indices(b, length=3):
+    mask = 1 << np.array(range(length))
+    return np.nonzero(b & mask != 0)[0]
+
+
 def find_first_set(b):
     ''' Return the index of the first set bit (bit == 1) in b. '''
-    return (b & -b).bit_length() - 1
+    return np.uint(np.log2(b & -b))
 
 
 def dx2(Y, b, i):
@@ -207,140 +181,7 @@ def dx2(Y, b, i):
     return D[b, i]
 
 
-B = np.array([
-    [1, 1, 1],  # 7
-    [0, 1, 1],  # 3
-    [1, 0, 1],  # 5
-    [1, 1, 0],  # 6
-    [0, 0, 1],  # 1
-    [0, 1, 0],  # 2
-    [1, 0, 0]], # 4
-    dtype=np.bool)
-
-
-
-
-def johnson3(Y, b):
-    # D[1 << 0, 0] = 1
-    # D[1 << 1, 1] = 1
-    # D[1 << 2, 2] = 1
-    #
-    # D[(1 << 0) + (1 << 1), 1] = D[1 << 0, 0] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 0])
-    # D[(1 << 0) + (1 << 2), 2] = D[1 << 0, 0] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 0])
-    #
-    # D[(1 << 1) + (1 << 0), 0] = D[1 << 1, 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1])
-    # D[(1 << 1) + (1 << 2), 2] = D[1 << 1, 1] * (Y[:, 1] - Y[:, 2]).dot(Y[:, 1])
-    #
-    # D[(1 << 2) + (1 << 0), 0] = D[1 << 2, 2] * (Y[:, 2] - Y[:, 0]).dot(Y[:, 2])
-    # D[(1 << 2) + (1 << 1), 1] = D[1 << 2, 2] * (Y[:, 2] - Y[:, 1]).dot(Y[:, 2])
-    #
-    # D[(1 << 2) + (1 << 1) + (1 << 1), 0] = \
-    #         D[(1 << 2) + (1 << 1), 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1]) \
-    #       + D[(1 << 2) + (1 << 1), 2] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 2])
-    #
-    # D[0b111, 1] = D[0b101, 0] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 0]) \
-    #             + D[0b101, 2] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 2])
-    #
-    # D[0b111, 2] = D[0b011, 0] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 0]) \
-    #             + D[0b011, 1] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 1])
-    #
-    #
-    # D[0b111, 0] = D[0b110, 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1]) \
-    #             + D[0b110, 2] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 2])
-    #
-    #
-    # # inputs
-    # b = 0b111
-    # i = 0
-    #
-    # # zero bit i in the index set
-    # bi = b & ~(1 << i)
-    #
-    # # find the first index in the subsimplex
-    # k = (bi & -bi).bit_length() - 1
-    #
-    # # recursive formula for \Delta_i^{b}
-    # D[b, i] = np.sum([ D[bi, j] * (Y[:, k] - Y[:, i]).dot(Y[:, j]) for j in range(3) if bi & (1 << j) ])
-    #
-    # if D[b, 0] > 0 and D[b, 1] > 0 and D[b, 2] > 0:
-    #     return
-
-    D = np.array((8, 3))
-
-    # singleton sets are unity
-    D[0b001, 0] = 1
-    D[0b010, 1] = 1
-    D[0b100, 2] = 1
-
-    # B = np.array([
-    #     [1, 1, 1],  # 7
-    #     [0, 1, 1],  # 3
-    #     [1, 0, 1],  # 5
-    #     [1, 1, 0],  # 6
-    #     [0, 0, 1],  # 1
-    #     [0, 1, 0],  # 2
-    #     [1, 0, 0]], # 4
-    #     dtype=np.bool)
-    B = np.array([0b001, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111])
-    M = np.array([8, 4, 2, 1])
-
-    # for idx in range(B.shape[0]):
-    #     bidx = B[idx, :]
-    #     for i in np.nonzero(bidx)[0]:
-    #         bi = 
-
-    # when calculating delta's, don't care about anything with a member we
-    # don't have
-    B_reduced = B[b | B == b]
-    for idx in range(B_reduced[4:,:].shape[0]):
-        bidx = B_reduced[4+idx, :]
-
-        # iterate over members of bidx
-        idx_in = (bidx & M) > 0
-        for i in np.nonzero(idx_in)[0]:
-            # zero bit i in the index set
-            bi = bidx & ~(1 << i)
-
-            # find the first index in the subsimplex
-            k = (bi & -bi).bit_length() - 1
-
-            D[bidx, i] = np.sum([ D[bi, j] * (Y[:, k] - Y[:, i]).dot(Y[:, j]) for j in range(3) if bi & (1 << j) ])
-
-    IPython.embed()
-
-
-    for i in range(B.shape[0]):
-        b = B[i, :]
-        # to calculate deltas, I need to iterate the current members of the set
-        idx_in = (b & M) > 0
-        idx_out = (b & M) <= 0
-        if np.all(D[b, idx_in] > 0) and np.all(D[b, idx_out] < 0):
-            return True
-
-
-    # i = 0
-    # bi = b & ~(1 << i)
-    # if d2_y2y3 > 0 and d3_y2y3 > 0 and D[b, i] <= 0:
-    #     dX = d2_y2y3 + d3_y2y3
-    #     v = (d2_y2y3 * y2 + d3_y2y3 * y3) / dX
-    #     return v, np.array([y2, y3]).T, False
-    #
-    # if d1_y1y3 > 0 and d3_y1y3 > 0 and d2_y1y2y3 <= 0:
-    #     dX = d1_y1y3 + d3_y1y3
-    #     v = (d1_y1y3 * y1 + d3_y1y3 * y3) / dX
-    #     return v, np.array([y1, y3]).T, False
-    #
-    # if d1_y1y2 > 0 and d2_y1y2 > 0 and d3_y1y2y3 <= 0:
-    #     dX = d1_y1y2 + d2_y1y2
-    #     v = (d1_y1y2 * y1 + d2_y1y2 * y2) / dX
-    #     return v, np.array([y1, y2]).T, False
-
-
 def johnson2(Y, index_set):
-    y1 = Y[:, 0]
-    y2 = Y[:, 1]
-    y3 = Y[:, 2]
-
     # store deltas: row is indexed by the points in the set X; column indexed
     # by delta index
     # {y1} represented by 001, {y2} by 010, etc
