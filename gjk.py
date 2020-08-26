@@ -1,10 +1,42 @@
 import numpy as np
-import IPython
 import matplotlib.pyplot as plt
 
 
+BITSETS = np.array([0b001, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111])
+
+
+def set_bit(b, i):
+    ''' Set bit i in b to one. '''
+    return b | (1 << i)
+
+
+def unset_bit(b, i):
+    ''' Set bit i in b to zero. '''
+    return b & ~(1 << i)
+
+
+def get_bit(b, i):
+    '''Get the value of the bit at index i in b. '''
+    return b & (1 << i)
+
+
+def bit_indices(b, length=3):
+    ''' Get the indices of set bits in b, up to length bits. '''
+    mask = 1 << np.array(range(length))
+    return np.nonzero(b & mask != 0)[0]
+
+
+def find_first_set(b):
+    ''' Return the index of the first one bit in b. '''
+    return int(np.log2(b & -b))
+
+
+def find_first_unset(b):
+    ''' Return the index of the first zero bit in b. '''
+    return find_first_set(~b)
+
+
 class Polygon:
-    ''' Convex polygonal shape. '''
     def __init__(self, vertices):
         # vertices stored as 2xn matrix
         self.vertices = vertices
@@ -33,8 +65,8 @@ def gjk(shape1, shape2, a0=np.array([1, 0]), eps=0.001):
             a0: arbitrary initial direction
         Returns:
             Distance between the shapes (0 if they intersect),
-            points a, b representing the closest points on the first and second
-            shapes, respectively. '''
+            points v1, v2 representing the closest points on the first and
+            second shapes, respectively. '''
     # arbitrary point in Minoski diff
     v = shape1.support(a0) - shape2.support(-a0)
 
@@ -47,6 +79,9 @@ def gjk(shape1, shape2, a0=np.array([1, 0]), eps=0.001):
     S = np.zeros((2, 3))
     bitset = 0
 
+    # to compute the closest points on the shapes, in addition to the distance,
+    # we need to keep track of the points from each shape used to compute the
+    # simplex
     S1 = np.zeros((2, 3))
     S2 = np.zeros((2, 3))
 
@@ -61,9 +96,8 @@ def gjk(shape1, shape2, a0=np.array([1, 0]), eps=0.001):
 
         # compute closest point to the origin in the simplex, as well the
         # smallest simplex that supports that point
-        v, bitset, contains_origin = johnson5(S, bitset)
+        v, bitset, contains_origin, coeffs = johnson(S, bitset)
 
-        # TODO not sure on this
         if contains_origin:
             break
 
@@ -72,34 +106,29 @@ def gjk(shape1, shape2, a0=np.array([1, 0]), eps=0.001):
         b = shape2.support(v)
         w = a - b
 
+    # compute closest points using the same coefficients as the closest point
+    # of the Minowski diff to the origin v
+    idx = bit_indices(bitset)
+    v1 = coeffs.dot(S1[:, idx].T)
+    v2 = coeffs.dot(S2[:, idx].T)
+
     distance = np.sqrt(v.dot(v))
-    IPython.embed()
-    return distance, a, b
+
+    return distance, v1, v2
 
 
-def dx(points, index_set, i):
-    # base case: delta = 1 for singleton sets
-    if np.sum(index_set) == 1:
-        return 1
-
-    # remove ith point
-    index_set_no_i = np.copy(index_set)
-    index_set_no_i[i] = False
-
-    # arbitrary which remaining point is chosen, so take the first one
-    nz_idx = np.nonzero(index_set_no_i)[0]
-    k = nz_idx[0]
-
-    dp = points[:, k] - points[:, i]
-
-    # compute dx for adding the ith element back into the simplex
-    return np.sum([ dx(points, index_set_i, j) * dp.dot(points[:, j]) for j in nz_idx ])
-
-
-BITSETS = np.array([0b001, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111])
-
-
-def johnson5(points, this_bitset):
+def johnson(points, this_bitset):
+    ''' Johnson distance algorithm
+        Parameters:
+            points: 2x3 matrix of points in the simplex
+            this_bitset: 3-bit number representing the active members of the
+                simplex
+        Returns:
+            v: the closest point of this simplex to the origin
+            bitset: the bitset of the smallest sub-simplex supporting v
+            contains_origin: True if the sub-simplex contains the origin
+            coeffs: Coefficients for the points in the sub-simplex to v via
+                convex combination '''
     # store deltas: row is indexed by the points in the set X; column indexed
     # by delta index
     # {y1} represented by 001, {y2} by 010, etc
@@ -139,237 +168,29 @@ def johnson5(points, this_bitset):
                 contains_closest_pt = False
 
         if contains_closest_pt:
-            v = np.zeros(2)
-            sv = 0
-            for j in bit_indices(bitset):
-                v += D[bitset, j] * points[:, j]
-                sv += D[bitset, j]
-            v = v / sv
+            idx = bit_indices(bitset)
+            coeffs = D[bitset, idx] / np.sum(D[bitset, idx])
+            v = coeffs.dot(points[:, idx].T)
             contains_origin = (bitset == 0b111)
-            return v, bitset, contains_origin
-
-
-def johnson4(points, index_set):
-    contains_closest_pt = True
-    for i, in_set in enumerate(index_set):
-        index_superset = np.copy(index_set)
-        index_superset[i] = True
-        delta = dx(points, index_superset, i)
-
-        # this simplex does not contain the closest point to origin if any
-        # deltas with indices in the set are nonpositive, or any not in the set
-        # are positive
-        if in_set and delta <= 0:
-            contains_closest_pt = False
-        elif not in_set and delta > 0:
-            contains_closest_pt = False
-
-        # no point continuing if this simplex isn't the one
-        if not contains_closest_pt:
-            break
-
-    if contains_closest_pt:
-        v = deltas[index_set].dot(points[:, index_set]) / np.sum(deltas[index_set])
-        contains_origin = (np.sum(index_set) == 3)
-        return v, index_set, contains_origin
-
-    if np.sum(index_set) == 1:
-        return None, None, False
-
-    for i in np.nonzero(index_set)[0]:
-        index_subset = np.copy(index_set)
-        index_subset[i] = False
-        v, closet_simplex, contains_origin = johnson4(points, index_subset)
-        if v is not None:
-            return v, closet_simplex, contains_origin
-
-
-def set_bit(b, i):
-    ''' Set bit i in b to one. '''
-    return b | (1 << i)
-
-
-def unset_bit(b, i):
-    ''' Set bit i in b to zero. '''
-    return b & ~(1 << i)
-
-
-def get_bit(b, i):
-    return b & (1 << i)
-
-
-def bit_indices(b, length=3):
-    mask = 1 << np.array(range(length))
-    return np.nonzero(b & mask != 0)[0]
-
-
-def find_first_set(b):
-    ''' Return the index of the first one bit in b. '''
-    return int(np.log2(b & -b))
-
-
-def find_first_unset(b):
-    ''' Return the index of the first zero bit in b. '''
-    return find_first_set(~b)
-
-
-def dx2(Y, b, i):
-    ''' Calculate delta_i^{b} '''
-    if b <= 0:
-        raise ValueError('b cannot be <= 0')
-
-    # base case
-    if b == 1 or b == 2 or b == 4:
-        return 1
-
-    # zero ith bit
-    bi = unset_bit(b, i)
-
-    # get the first member of the set
-    k = find_first_set(bi)
-
-    dy = Y[:, k] - Y[:, i]
-
-    D[b, i] = np.sum([ dx2(Y, bi, j) * dy.dot(Y[:, j]) for j in range(3) if get_bit(bi, j) ])
-    return D[b, i]
-
-
-def johnson2(Y, index_set):
-    # store deltas: row is indexed by the points in the set X; column indexed
-    # by delta index
-    # {y1} represented by 001, {y2} by 010, etc
-    D = np.array((8, 3))
-
-    # singleton sets are unity
-    D[0b001, 0] = 1
-    D[0b010, 1] = 1
-    D[0b100, 2] = 1
-
-    D[0b011, 1] = D[0b001, 0] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 0])
-    D[0b101, 2] = D[0b001, 0] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 0])
-
-    if D[0b011, 1] <= 0 and D[0b101, 2] <= 0:
-        return Y[:, 0]
-
-    D[0b011, 0] = D[0b010, 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1])
-    D[0b110, 2] = D[0b010, 1] * (Y[:, 1] - Y[:, 2]).dot(Y[:, 1])
-
-    if D[0b011, 0] <= 0 and D[0b110, 2] <= 0:
-        return Y[:, 1]
-
-    D[0b101, 0] = D[0b100, 2] * (Y[:, 2] - Y[:, 0]).dot(Y[:, 2])
-    D[0b110, 1] = D[0b100, 2] * (Y[:, 2] - Y[:, 1]).dot(Y[:, 2])
-
-    if D[0b101, 0] <= 0 and D[0b110, 1] <= 0:
-        return Y[:, 2]
-
-    D[0b111, 0] = D[0b110, 1] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 1]) \
-                + D[0b110, 2] * (Y[:, 1] - Y[:, 0]).dot(Y[:, 2])
-
-    D[0b111, 1] = D[0b101, 0] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 0]) \
-                + D[0b101, 2] * (Y[:, 0] - Y[:, 1]).dot(Y[:, 2])
-
-    D[0b111, 2] = D[0b011, 0] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 0]) \
-                + D[0b011, 1] * (Y[:, 0] - Y[:, 2]).dot(Y[:, 1])
-
-
-def johnson(Y):
-    ''' Unrolled 2D version of Johnson's distance algorithm.
-        Returns:
-            v  closest point to origin
-            X  simplex supporting v
-            True if Y contains the origin, false otherwise '''
-    # b is a binary array denoting which members of Y are actually in the
-    # simplex
-
-    # TODO right now assuming origin is not exactly on a vertex or edge
-    y1 = Y[:, 0]
-    y2 = Y[:, 1]
-    y3 = Y[:, 2]
-
-    # check vertices
-    d1_y1 = 1
-    d2_y1y2 = d1_y1 * (y1 - y2).dot(y1)
-    d3_y1y3 = d1_y1 * (y1 - y3).dot(y1)
-
-    if d2_y1y2 <= 0 and d3_y1y3 <= 0:
-        return y1, y1, False
-
-    d2_y2 = 1
-    d1_y1y2 = d2_y2 * (y2 - y1).dot(y2)
-    d3_y2y3 = d2_y2 * (y2 - y3).dot(y2)
-
-    if d1_y1y2 <= 0 and d3_y2y3 <= 0:
-        return y2, y2, False
-
-    d3_y3 = 1
-    d1_y1y3 = d3_y3 * (y3 - y1).dot(y3)
-    d2_y2y3 = d3_y3 * (y3 - y2).dot(y3)
-
-    if d1_y1y3 <= 0 and d2_y2y3 <= 0:
-        return y3, y3, False
-
-    # check edges
-    d1_y1y2y3 = d2_y2y3 * (y2 - y1).dot(y2) + d3_y2y3 * (y2 - y1).dot(y3)
-    d2_y1y2y3 = d1_y1y3 * (y1 - y2).dot(y1) + d3_y1y3 * (y1 - y2).dot(y3)
-    d3_y1y2y3 = d1_y1y2 * (y1 - y3).dot(y1) + d2_y1y2 * (y1 - y3).dot(y2)
-
-    if d2_y2y3 > 0 and d3_y2y3 > 0 and d1_y1y2y3 <= 0:
-        dX = d2_y2y3 + d3_y2y3
-        v = (d2_y2y3 * y2 + d3_y2y3 * y3) / dX
-        return v, np.array([y2, y3]).T, False
-
-    if d1_y1y3 > 0 and d3_y1y3 > 0 and d2_y1y2y3 <= 0:
-        dX = d1_y1y3 + d3_y1y3
-        v = (d1_y1y3 * y1 + d3_y1y3 * y3) / dX
-        return v, np.array([y1, y3]).T, False
-
-    if d1_y1y2 > 0 and d2_y1y2 > 0 and d3_y1y2y3 <= 0:
-        dX = d1_y1y2 + d2_y1y2
-        v = (d1_y1y2 * y1 + d2_y1y2 * y2) / dX
-        return v, np.array([y1, y2]).T, False
-
-    # final check equivalent to
-    # d1_y1y2y3 > 0 and d2_y1y2y3 > 0 and d3_y1y2y3 > 0
-    # want to be able to do bitwise enabling
-
-    return np.zeros(2), Y, True
+            return v, bitset, contains_origin, coeffs
 
 
 def main():
-    # S = np.array([[0, 0], [0, 1], [1, 0]]) + np.array([0, 0.5])
-    # X = S.T
-    # S = np.random.random((2, 3)) * 10 - 5
-    # v1, X1, contains_origin1 = johnson(S)
-    # S = np.zeros((2, 3))
-    # S[:, 0] = np.ones(2)
-    # v2, X2, contains_origin2 = johnson5(S, 0b001)
-    # print(v1)
-    # print(v2)
-    #
-    V = np.random.random((2, 3)) * 10 - 5
-
+    # test shapes
     shape1 = Circle(c=np.random.random(2)*8-4, r=1)
-    shape2 = Polygon(V)
+    shape2 = Polygon(np.random.random((2, 3)) * 10 - 5)
 
-    d, a, b = gjk(shape1, shape2)
+    # calculate distance and closest points on shapes
+    d, v1, v2 = gjk(shape1, shape2)
     print(d)
 
+    # plot shapes and the closest points between them
     fig, ax = plt.subplots(1)
     ax.set_xlim([-5, 5])
     ax.set_ylim([-5, 5])
     ax.add_patch(plt.Circle(shape1.c, shape1.r, fill=False))
     ax.add_patch(plt.Polygon(shape2.vertices.T, color='k', fill=False, closed=True))
-    plt.plot([a[0], b[0]], [a[1], b[1]], '-o')
-    # plt.plot([0, v2[0]], [0, v2[1]], '-o', label='v2')
-
-    # fig, ax = plt.subplots(1)
-    # ax.set_xlim([-5, 5])
-    # ax.set_ylim([-5, 5])
-    # ax.add_patch(plt.Polygon(S.T, color='k', fill=False, closed=True))
-    # plt.plot([0, v1[0]], [0, v1[1]], '-o', label='v1')
-    # plt.plot([0, v2[0]], [0, v2[1]], '-o', label='v2')
-    # plt.legend()
+    plt.plot([v1[0], v2[0]], [v1[1], v2[1]], '-o')
     plt.grid()
     plt.show()
 
